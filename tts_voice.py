@@ -14,9 +14,12 @@ import numpy as np
 import soundfile as sf
 import subprocess
 import tempfile
-import os as _os
+import gc
+import threading
 import time
+import re
 import config
+import settings
 
 torch.set_float32_matmul_precision("high")
 try:
@@ -31,49 +34,18 @@ try:
 except Exception:
     pass
 
+MODELS = {
+    "base": config.QWEN_MODEL_ID,                    # клон по эталону
+    "voicedesign": config.VOICEDESIGN_MODEL_ID,      # голос из текстового описания
+}
+MODE_NAMES = {"base": "Клон (Base)", "voicedesign": "VoiceDesign"}
+
 _model = None
-_clone_prompt = None
-
-def get_model():
-    global _model
-    if _model is None:
-        from qwen_tts import Qwen3TTSModel
-        try:
-            _model = Qwen3TTSModel.from_pretrained(
-                config.QWEN_MODEL_ID,  # Qwen/Qwen3-TTS-12Hz-1.7B-Base
-                device_map="cuda:0",
-                dtype=torch.bfloat16,
-                attn_implementation="flash_attention_2",
-            )
-        except Exception:
-            # без flash_attn на Windows падаем на sdpa, медленнее но работает
-            _model = Qwen3TTSModel.from_pretrained(
-                config.QWEN_MODEL_ID,
-                device_map="cuda:0",
-                dtype=torch.bfloat16,
-                attn_implementation="sdpa",
-            )
-        # Локальный .venv: torch cu130 + triton-windows, compile работает.
-        # use_compile=True дает главный прирост (см. бенчи форка).
-        try:
-            _model.enable_streaming_optimizations(
-                decode_window_frames=80,
-                use_compile=True,
-                use_cuda_graphs=False,
-                compile_mode="reduce-overhead",
-                use_fast_codebook=True,
-                compile_codebook_predictor=True,
-                compile_talker=True,
-            )
-            print("[tts] compile mode on (reduce-overhead)")
-        except Exception as e2:
-            print(f"[tts] optimizations skipped: {e2}")
-    return _model
-
-import re
+_loaded_mode = None
+_clone_prompts = {}  # name -> prompt, только для base
+_lock = threading.RLock()
 
 # Ремарки вида *хихикает*, [смеется], (пауза), эмодзи - TTS читает их вслух как текст.
-# Режем перед синтезом. История в brain.py хранит оригинал, сюда приходит уже чистка.
 _RE_STAR = re.compile(r"\*[^*]+\*")
 _RE_SQUARE = re.compile(r"\[[^\]]+\]")
 _RE_PAREN = re.compile(r"\([^)]+\)")
@@ -81,14 +53,12 @@ _RE_EMOJI = re.compile(
     "[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F]"
 )
 _RE_WS = re.compile(r"\s+")
-# Дефис внутри слова (кого-то, что-нибудь): Qwen читает с паузой "кого ... то".
-# Меняем на пробел - "кого то" звучит слитно. Тире-паузы (— –) не трогаем.
+# Дефис внутри слова (кого-то): Qwen читает с паузой "кого ... то" -> пробел. Тире (— –) не трогаем.
 _RE_HYPHEN = re.compile(r"(?<=\w)[-‐‑](?=\w)")
 
 def clean_for_tts(text: str) -> str:
     t = _RE_STAR.sub(" ", text)
     t = _RE_SQUARE.sub(" ", t)
-    # скобки режем только короткие ремарки, длинные оставляем (там может быть смысл)
     t = _RE_PAREN.sub(lambda m: " " if len(m.group(0)) < 40 else m.group(0), t)
     t = _RE_EMOJI.sub("", t)
     t = t.replace("*", "").replace("#", "")
@@ -96,40 +66,135 @@ def clean_for_tts(text: str) -> str:
     t = _RE_WS.sub(" ", t).strip(" ,.-")
     return t or "Хихи... повтори еще раз!"
 
-def get_clone_prompt():
-    global _clone_prompt
-    if _clone_prompt is None:
-        m = get_model()
-        _clone_prompt = m.create_voice_clone_prompt(
-            ref_audio=config.REF_AUDIO,  # voices/shyni_ref.wav - русская девочка
-            ref_text=config.REF_TEXT,
+def unload_model():
+    """Полная выгрузка модели из VRAM."""
+    global _model, _loaded_mode, _clone_prompts
+    with _lock:
+        _clone_prompts = {}
+        if _model is not None:
+            try:
+                del _model
+            except Exception:
+                pass
+            _model = None
+        _loaded_mode = None
+        gc.collect()
+        try:
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        except Exception:
+            pass
+        print("[tts] модель выгружена")
+
+def _load_locked(mode: str):
+    global _model, _loaded_mode
+    from qwen_tts import Qwen3TTSModel
+    try:
+        _model = Qwen3TTSModel.from_pretrained(
+            MODELS[mode],
+            device_map="cuda:0",
+            dtype=torch.bfloat16,
+            attn_implementation="flash_attention_2",
         )
-    return _clone_prompt
+    except Exception:
+        # без flash_attn на Windows падаем на sdpa, медленнее но работает
+        _model = Qwen3TTSModel.from_pretrained(
+            MODELS[mode],
+            device_map="cuda:0",
+            dtype=torch.bfloat16,
+            attn_implementation="sdpa",
+        )
+    try:
+        _model.enable_streaming_optimizations(
+            decode_window_frames=80,
+            use_compile=True,
+            use_cuda_graphs=False,
+            compile_mode="reduce-overhead",
+            use_fast_codebook=True,
+            compile_codebook_predictor=True,
+            compile_talker=True,
+        )
+        print("[tts] compile mode on (reduce-overhead)")
+    except Exception as e2:
+        print(f"[tts] optimizations skipped: {e2}")
+    _loaded_mode = mode
+
+def get_model(mode: str = None):
+    global _model, _loaded_mode
+    mode = mode or settings.get_mode()
+    with _lock:
+        if _model is None or _loaded_mode != mode:
+            if _model is not None:
+                unload_model()
+            print(f"[tts] загрузка режима {mode} ({MODELS[mode]})...")
+            _load_locked(mode)
+    return _model
+
+def get_clone_prompt(name: str):
+    if name not in _clone_prompts:
+        row = settings.get_base_voice_row(name) or settings.get_base_voice_row("shyni")
+        ref_audio, ref_text = row[0], row[1]
+        m = get_model("base")
+        _clone_prompts[name] = m.create_voice_clone_prompt(
+            ref_audio=ref_audio,
+            ref_text=ref_text,
+        )
+    return _clone_prompts[name]
+
+def current_status() -> str:
+    mode = settings.get_mode()
+    if mode == "base":
+        return f"Клон (Base), голос: {settings.get_base_voice()}"
+    return f"VoiceDesign, пресет: {settings.get_vd_preset()}"
+
+def switch_mode(mode: str) -> float:
+    """Выгрузить текущее, загрузить новое, прогреть. Возвращает секунды."""
+    t0 = time.time()
+    unload_model()
+    get_model(mode)
+    if mode == "base":
+        get_clone_prompt(settings.get_base_voice())
+    dt = time.time() - t0
+    print(f"[tts] режим {mode} готов за {dt:.0f}с")
+    return dt
 
 def speak_to_ogg(text: str, out_ogg: str):
-    """Текст -> чистка ремарок -> wav 24kHz через dffdeeq клон -> ogg opus для ТГ voice."""
+    """Текст -> чистка -> синтез активным режимом -> ogg opus для ТГ voice."""
+    mode = settings.get_mode()
     clean = clean_for_tts(text)
     if clean != text:
         print(f"[tts] чистка: {text[:80]!r} -> {clean[:80]!r}")
-    m = get_model()
-    prompt = get_clone_prompt()
-    wavs, sr = m.generate_voice_clone(
-        text=clean,
-        language=config.TTS_LANG,
-        voice_clone_prompt=prompt,
-    )
+    m = get_model(mode)
+    if mode == "voicedesign":
+        name = settings.get_vd_preset()
+        instruct = settings.get_vd_instruct(name)
+        if instruct is None:
+            name = "shyni"
+            instruct = settings.get_vd_instruct("shyni")
+        wavs, sr = m.generate_voice_design(
+            text=clean,
+            language=config.TTS_LANG,
+            instruct=instruct,
+        )
+    else:
+        name = settings.get_base_voice()
+        prompt = get_clone_prompt(name)
+        wavs, sr = m.generate_voice_clone(
+            text=clean,
+            language=config.TTS_LANG,
+            voice_clone_prompt=prompt,
+        )
     audio = wavs[0]
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
         tmp_wav = tf.name
     try:
         sf.write(tmp_wav, audio, sr)
-        # ffmpeg обязателен, качаем с ffmpeg.org, кладем в PATH
         subprocess.run(
             ["ffmpeg", "-y", "-i", tmp_wav, "-c:a", "libopus", "-b:a", "64k", out_ogg],
             check=True, capture_output=True,
         )
     finally:
-        if _os.path.exists(tmp_wav):
-            _os.remove(tmp_wav)
+        if os.path.exists(tmp_wav):
+            os.remove(tmp_wav)
     return out_ogg
