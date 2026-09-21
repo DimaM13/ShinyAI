@@ -45,7 +45,7 @@ async def shyni_reply(user_text: str, chat_key: str) -> str:
     lines = []
     if profile:
         lines.append(f"[Память о пользователе: {profile[:500]}]")
-    for role, text in hist[-6:]:
+    for role, text in hist[-10:]:
         who = "Пользователь" if role == "user" else "Shyni"
         lines.append(f"{who}: {text[:300]}")
     lines.append(f"Пользователь: {user_text[:1000]}\nShyni:")
