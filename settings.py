@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS vd_presets (
 """
 
 DEFAULT_VD_INSTRUCT = (
+    "Голос аниме-девочки, естественный и мягкий, говорит по-русски спокойно."
+)
+
+OLD_VD_INSTRUCT = (
     "Молодая девушка, звонкий высокий голос, милая и игривая, "
     "говорит по-русски живо и эмоционально."
 )
@@ -41,6 +45,11 @@ def init_settings():
         db.execute(
             "INSERT OR IGNORE INTO vd_presets (name, instruct) VALUES (?, ?)",
             ("shyni", DEFAULT_VD_INSTRUCT),
+        )
+        # Обновляем сид-пресет на новый, если юзер его не трогал (там нет редактирования, только создание/удаление)
+        db.execute(
+            "UPDATE vd_presets SET instruct=? WHERE name='shyni' AND instruct=?",
+            (DEFAULT_VD_INSTRUCT, OLD_VD_INSTRUCT),
         )
 
 def _get(key: str, default: str = "") -> str:

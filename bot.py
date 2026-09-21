@@ -153,7 +153,7 @@ async def cb_base_voice(cb: CallbackQuery):
     await cb.message.edit_text(f"🎙 Клон (Base), голос: {name}", reply_markup=kb_base())
     await cb.answer(f"Голос: {name}")
 
-@dp.callback_query(F.data.startswith("m:vd:"))
+@dp.callback_query(F.data.startswith("m:vd:") & ~F.data.in_({"m:vd:new"}))
 async def cb_vd_preset(cb: CallbackQuery):
     if not _owner_cb(cb):
         await cb.answer("Не твои кнопки 🙂")
