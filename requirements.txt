@@ -1,0 +1,10 @@
+aiogram>=3.0
+python-dotenv
+google-genai
+aiosqlite
+soundfile
+librosa
+numpy
+# qwen-tts ставим отдельно из твоего форка:
+# pip install -e ./Qwen3-TTS-streaming
+# torch ставим отдельно под CUDA (см. инструкцию в чате)

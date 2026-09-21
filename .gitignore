@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+*.wav
+*.ogg
+*.mp3
+shyni.db
+output_*.wav
+.venv/
+Qwen3-TTS-streaming/
+tts_test*.log
