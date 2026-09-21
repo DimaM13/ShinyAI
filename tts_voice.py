@@ -53,21 +53,19 @@ def get_model():
                 dtype=torch.bfloat16,
                 attn_implementation="sdpa",
             )
-        # Оптимизации из dffdeeq форка. На Windows+3050 triton/inductor часто падает -
-        # тогда едем на eager без компиляции, медленнее но стабильно.
-        # use_compile=False сразу: без triton compile все равно падает в fallback,
-        # только спамит в консоль. Быстрого пути без flash-attn+triton нет.
+        # Локальный .venv: torch cu130 + triton-windows, compile работает.
+        # use_compile=True дает главный прирост (см. бенчи форка).
         try:
             _model.enable_streaming_optimizations(
                 decode_window_frames=80,
-                use_compile=False,
+                use_compile=True,
                 use_cuda_graphs=False,
                 compile_mode="reduce-overhead",
                 use_fast_codebook=True,
-                compile_codebook_predictor=False,
-                compile_talker=False,
+                compile_codebook_predictor=True,
+                compile_talker=True,
             )
-            print("[tts] eager mode (без torch.compile, тихо и стабильно)")
+            print("[tts] compile mode on (reduce-overhead)")
         except Exception as e2:
             print(f"[tts] optimizations skipped: {e2}")
     return _model
