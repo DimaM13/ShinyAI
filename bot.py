@@ -23,6 +23,9 @@ def log(msg: str):
 bot = Bot(token=config.TELEGRAM_TOKEN)
 dp = Dispatcher()
 
+BOT_ID = 0
+BOT_USERNAME = ""
+
 @dp.message(F.text == "/start")
 async def start(m: Message):
     log(f"/start от {m.from_user.id} в {m.chat.type}")
@@ -31,9 +34,23 @@ async def start(m: Message):
 def should_reply(m: Message) -> tuple[bool, str]:
     if m.chat.type == "private":
         return True, "лс"
-    if m.reply_to_message and m.reply_to_message.from_user and m.reply_to_message.from_user.id == bot.id:
+    # реплай на сообщение бота
+    if m.reply_to_message and m.reply_to_message.from_user and m.reply_to_message.from_user.id == BOT_ID:
         return True, "реплай на бота"
-    if m.text and "@" in m.text and "shyni" in m.text.lower():
+    txt = (m.text or "")
+    low = txt.lower()
+    # сущности mention от Телеграма - самый надежный путь
+    for e in (m.entities or []):
+        if e.type == "mention":
+            mention = txt[e.offset:e.offset + e.length].lower()
+            if BOT_USERNAME and mention == "@" + BOT_USERNAME:
+                return True, "упоминание"
+        elif e.type == "text_mention" and e.user and e.user.id == BOT_ID:
+            return True, "упоминание"
+    # запасной путь: юзернейм текстом / имя персонажа (оба написания shyni/shiny)
+    if BOT_USERNAME and ("@" + BOT_USERNAME) in low:
+        return True, "упоминание"
+    if "shyni" in low or "shiny" in low:
         return True, "упоминание"
     return False, "группа без обращения - игнор"
 
@@ -85,8 +102,16 @@ async def on_text(m: Message):
                 os.remove(out)
 
 async def main():
+    global BOT_ID, BOT_USERNAME
     log("старт, init db...")
     await memory.init_db()
+    try:
+        me = await bot.get_me()
+        BOT_ID = me.id
+        BOT_USERNAME = (me.username or "").lower()
+        log(f"я @{BOT_USERNAME} id={BOT_ID}")
+    except Exception as e:
+        log(f"get_me fail: {e}")
     log("warmup TTS (первый раз 1-2 мин, тихо)...")
     try:
         t0 = time.time()
