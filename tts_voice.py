@@ -81,6 +81,9 @@ _RE_EMOJI = re.compile(
     "[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F]"
 )
 _RE_WS = re.compile(r"\s+")
+# Дефис внутри слова (кого-то, что-нибудь): Qwen читает с паузой "кого ... то".
+# Меняем на пробел - "кого то" звучит слитно. Тире-паузы (— –) не трогаем.
+_RE_HYPHEN = re.compile(r"(?<=\w)[-‐‑](?=\w)")
 
 def clean_for_tts(text: str) -> str:
     t = _RE_STAR.sub(" ", text)
@@ -89,6 +92,7 @@ def clean_for_tts(text: str) -> str:
     t = _RE_PAREN.sub(lambda m: " " if len(m.group(0)) < 40 else m.group(0), t)
     t = _RE_EMOJI.sub("", t)
     t = t.replace("*", "").replace("#", "")
+    t = _RE_HYPHEN.sub(" ", t)
     t = _RE_WS.sub(" ", t).strip(" ,.-")
     return t or "Хихи... повтори еще раз!"
 

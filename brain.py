@@ -24,7 +24,7 @@ def get_client():
 def _make_config():
     return types.GenerateContentConfig(
         system_instruction=config.SHYNI_SYSTEM,
-        temperature=0.9,
+        temperature=0.7,
         max_output_tokens=500,
         # Без этого модель 40с "думает" и ответ не влезает в лимит -> пустой text
         thinking_config=types.ThinkingConfig(thinking_level="MINIMAL"),
@@ -44,11 +44,11 @@ async def shyni_reply(user_text: str, chat_key: str) -> str:
 
     lines = []
     if profile:
-        lines.append(f"[Память о пользователе: {profile}]")
-    for role, text in hist[-10:]:
+        lines.append(f"[Память о пользователе: {profile[:500]}]")
+    for role, text in hist[-6:]:
         who = "Пользователь" if role == "user" else "Shyni"
-        lines.append(f"{who}: {text}")
-    lines.append(f"Пользователь: {user_text}\nShyni:")
+        lines.append(f"{who}: {text[:300]}")
+    lines.append(f"Пользователь: {user_text[:1000]}\nShyni:")
     prompt = "\n".join(lines)
 
     client = get_client()
