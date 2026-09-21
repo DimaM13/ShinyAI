@@ -34,15 +34,8 @@ try:
 except Exception:
     pass
 
-MODELS = {
-    "base": config.QWEN_MODEL_ID,                    # клон по эталону
-    "voicedesign": config.VOICEDESIGN_MODEL_ID,      # голос из текстового описания
-}
-MODE_NAMES = {"base": "Клон (Base)", "voicedesign": "VoiceDesign"}
-
 _model = None
-_loaded_mode = None
-_clone_prompts = {}  # name -> prompt, только для base
+_clone_prompts = {}  # name -> prompt
 _lock = threading.RLock()
 
 # Ремарки вида *хихикает*, [смеется], (пауза), эмодзи - TTS читает их вслух как текст.
@@ -68,7 +61,7 @@ def clean_for_tts(text: str) -> str:
 
 def unload_model():
     """Полная выгрузка модели из VRAM."""
-    global _model, _loaded_mode, _clone_prompts
+    global _model, _clone_prompts
     with _lock:
         _clone_prompts = {}
         if _model is not None:
@@ -77,7 +70,6 @@ def unload_model():
             except Exception:
                 pass
             _model = None
-        _loaded_mode = None
         gc.collect()
         try:
             torch.cuda.empty_cache()
@@ -86,55 +78,47 @@ def unload_model():
             pass
         print("[tts] модель выгружена")
 
-def _load_locked(mode: str):
-    global _model, _loaded_mode
-    from qwen_tts import Qwen3TTSModel
-    try:
-        _model = Qwen3TTSModel.from_pretrained(
-            MODELS[mode],
-            device_map="cuda:0",
-            dtype=torch.bfloat16,
-            attn_implementation="flash_attention_2",
-        )
-    except Exception:
-        # без flash_attn на Windows падаем на sdpa, медленнее но работает
-        _model = Qwen3TTSModel.from_pretrained(
-            MODELS[mode],
-            device_map="cuda:0",
-            dtype=torch.bfloat16,
-            attn_implementation="sdpa",
-        )
-    try:
-        _model.enable_streaming_optimizations(
-            decode_window_frames=80,
-            use_compile=True,
-            use_cuda_graphs=False,
-            compile_mode="reduce-overhead",
-            use_fast_codebook=True,
-            compile_codebook_predictor=True,
-            compile_talker=True,
-        )
-        print("[tts] compile mode on (reduce-overhead)")
-    except Exception as e2:
-        print(f"[tts] optimizations skipped: {e2}")
-    _loaded_mode = mode
-
-def get_model(mode: str = None):
-    global _model, _loaded_mode
-    mode = mode or settings.get_mode()
+def get_model():
+    global _model
     with _lock:
-        if _model is None or _loaded_mode != mode:
-            if _model is not None:
-                unload_model()
-            print(f"[tts] загрузка режима {mode} ({MODELS[mode]})...")
-            _load_locked(mode)
+        if _model is None:
+            from qwen_tts import Qwen3TTSModel
+            print(f"[tts] загрузка {config.QWEN_MODEL_ID}...")
+            try:
+                _model = Qwen3TTSModel.from_pretrained(
+                    config.QWEN_MODEL_ID,  # Qwen/Qwen3-TTS-12Hz-1.7B-Base
+                    device_map="cuda:0",
+                    dtype=torch.bfloat16,
+                    attn_implementation="flash_attention_2",
+                )
+            except Exception:
+                # без flash_attn на Windows падаем на sdpa, медленнее но работает
+                _model = Qwen3TTSModel.from_pretrained(
+                    config.QWEN_MODEL_ID,
+                    device_map="cuda:0",
+                    dtype=torch.bfloat16,
+                    attn_implementation="sdpa",
+                )
+            try:
+                _model.enable_streaming_optimizations(
+                    decode_window_frames=80,
+                    use_compile=True,
+                    use_cuda_graphs=False,
+                    compile_mode="reduce-overhead",
+                    use_fast_codebook=True,
+                    compile_codebook_predictor=True,
+                    compile_talker=True,
+                )
+                print("[tts] compile mode on (reduce-overhead)")
+            except Exception as e2:
+                print(f"[tts] optimizations skipped: {e2}")
     return _model
 
 def get_clone_prompt(name: str):
     if name not in _clone_prompts:
         row = settings.get_base_voice_row(name) or settings.get_base_voice_row("shyni")
         ref_audio, ref_text = row[0], row[1]
-        m = get_model("base")
+        m = get_model()
         _clone_prompts[name] = m.create_voice_clone_prompt(
             ref_audio=ref_audio,
             ref_text=ref_text,
@@ -142,48 +126,21 @@ def get_clone_prompt(name: str):
     return _clone_prompts[name]
 
 def current_status() -> str:
-    mode = settings.get_mode()
-    if mode == "base":
-        return f"Клон (Base), голос: {settings.get_base_voice()}"
-    return f"VoiceDesign, пресет: {settings.get_vd_preset()}"
-
-def switch_mode(mode: str) -> float:
-    """Выгрузить текущее, загрузить новое, прогреть. Возвращает секунды."""
-    t0 = time.time()
-    unload_model()
-    get_model(mode)
-    if mode == "base":
-        get_clone_prompt(settings.get_base_voice())
-    dt = time.time() - t0
-    print(f"[tts] режим {mode} готов за {dt:.0f}с")
-    return dt
+    return f"Клон (Base), голос: {settings.get_base_voice()}"
 
 def speak_to_ogg(text: str, out_ogg: str):
-    """Текст -> чистка -> синтез активным режимом -> ogg opus для ТГ voice."""
-    mode = settings.get_mode()
+    """Текст -> чистка -> клон активного голоса -> ogg opus для ТГ voice."""
     clean = clean_for_tts(text)
     if clean != text:
         print(f"[tts] чистка: {text[:80]!r} -> {clean[:80]!r}")
-    m = get_model(mode)
-    if mode == "voicedesign":
-        name = settings.get_vd_preset()
-        instruct = settings.get_vd_instruct(name)
-        if instruct is None:
-            name = "shyni"
-            instruct = settings.get_vd_instruct("shyni")
-        wavs, sr = m.generate_voice_design(
-            text=clean,
-            language=config.TTS_LANG,
-            instruct=instruct,
-        )
-    else:
-        name = settings.get_base_voice()
-        prompt = get_clone_prompt(name)
-        wavs, sr = m.generate_voice_clone(
-            text=clean,
-            language=config.TTS_LANG,
-            voice_clone_prompt=prompt,
-        )
+    m = get_model()
+    name = settings.get_base_voice()
+    prompt = get_clone_prompt(name)
+    wavs, sr = m.generate_voice_clone(
+        text=clean,
+        language=config.TTS_LANG,
+        voice_clone_prompt=prompt,
+    )
     audio = wavs[0]
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:

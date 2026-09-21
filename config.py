@@ -11,7 +11,6 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 GEMMA_MODEL = os.getenv("GEMMA_MODEL", "gemma-4-31b-it")
 
 QWEN_MODEL_ID = os.getenv("QWEN_MODEL_ID", "Qwen/Qwen3-TTS-12Hz-1.7B-Base")
-VOICEDESIGN_MODEL_ID = os.getenv("VOICEDESIGN_MODEL_ID", "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign")
 REF_AUDIO = os.getenv("REF_AUDIO", "voices/shyni_ref.wav")
 TTS_LANG = os.getenv("TTS_LANG", "Russian")
 

@@ -1,4 +1,4 @@
-"""Настройки Shyni: режим TTS, голоса Base, пресеты VoiceDesign.
+"""Настройки Shyni: голоса Base для клона.
 
 Синхронный sqlite (тот же shyni.db) - дергается и из хендлеров, и из потока синтеза.
 """
@@ -14,20 +14,7 @@ CREATE TABLE IF NOT EXISTS base_voices (
   ref_audio TEXT NOT NULL,
   ref_text TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS vd_presets (
-  name TEXT PRIMARY KEY,
-  instruct TEXT NOT NULL
-);
 """
-
-DEFAULT_VD_INSTRUCT = (
-    "Голос аниме-девочки, естественный и мягкий, говорит по-русски спокойно."
-)
-
-OLD_VD_INSTRUCT = (
-    "Молодая девушка, звонкий высокий голос, милая и игривая, "
-    "говорит по-русски живо и эмоционально."
-)
 
 def _con():
     return sqlite3.connect(DB_PATH, timeout=10)
@@ -35,21 +22,12 @@ def _con():
 def init_settings():
     with _con() as db:
         db.executescript(SCHEMA)
-        db.execute("INSERT OR IGNORE INTO kv (key, value) VALUES ('tts_mode', 'base')")
+        db.execute("DROP TABLE IF EXISTS vd_presets")
+        db.execute("DELETE FROM kv WHERE key IN ('tts_mode', 'vd_preset')")
         db.execute("INSERT OR IGNORE INTO kv (key, value) VALUES ('base_voice', 'shyni')")
-        db.execute("INSERT OR IGNORE INTO kv (key, value) VALUES ('vd_preset', 'shyni')")
         db.execute(
             "INSERT OR IGNORE INTO base_voices (name, ref_audio, ref_text) VALUES (?, ?, ?)",
             ("shyni", config.REF_AUDIO, config.REF_TEXT),
-        )
-        db.execute(
-            "INSERT OR IGNORE INTO vd_presets (name, instruct) VALUES (?, ?)",
-            ("shyni", DEFAULT_VD_INSTRUCT),
-        )
-        # Обновляем сид-пресет на новый, если юзер его не трогал (там нет редактирования, только создание/удаление)
-        db.execute(
-            "UPDATE vd_presets SET instruct=? WHERE name='shyni' AND instruct=?",
-            (DEFAULT_VD_INSTRUCT, OLD_VD_INSTRUCT),
         )
 
 def _get(key: str, default: str = "") -> str:
@@ -60,13 +38,6 @@ def _get(key: str, default: str = "") -> str:
 def _set(key: str, value: str):
     with _con() as db:
         db.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)", (key, value))
-
-def get_mode() -> str:
-    m = _get("tts_mode", "base")
-    return m if m in ("base", "voicedesign") else "base"
-
-def set_mode(mode: str):
-    _set("tts_mode", mode)
 
 def get_base_voice() -> str:
     return _get("base_voice", "shyni")
@@ -90,33 +61,3 @@ def add_base_voice(name: str, ref_audio: str, ref_text: str):
             "INSERT OR REPLACE INTO base_voices (name, ref_audio, ref_text) VALUES (?, ?, ?)",
             (name, ref_audio, ref_text),
         )
-
-def get_vd_preset() -> str:
-    return _get("vd_preset", "shyni")
-
-def set_vd_preset(name: str):
-    _set("vd_preset", name)
-
-def list_vd_presets():
-    with _con() as db:
-        return db.execute("SELECT name FROM vd_presets ORDER BY name").fetchall()
-
-def get_vd_instruct(name: str):
-    with _con() as db:
-        row = db.execute("SELECT instruct FROM vd_presets WHERE name=?", (name,)).fetchone()
-    return row[0] if row else None
-
-def add_vd_preset(name: str, instruct: str):
-    with _con() as db:
-        db.execute("INSERT OR REPLACE INTO vd_presets (name, instruct) VALUES (?, ?)", (name, instruct))
-
-def del_vd_preset(name: str) -> bool:
-    """Нельзя удалить последний пресет и активный сносим на первый оставшийся."""
-    names = [r[0] for r in list_vd_presets()]
-    if name not in names or len(names) <= 1:
-        return False
-    with _con() as db:
-        db.execute("DELETE FROM vd_presets WHERE name=?", (name,))
-    if get_vd_preset() == name:
-        set_vd_preset([n for n in names if n != name][0])
-    return True
