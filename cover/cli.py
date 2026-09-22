@@ -152,9 +152,16 @@ def run_job(job: dict, log=print):
     mux_in = ["-i", conv_wav]
     filt = "[0:a]aresample=44100,aformat=channel_layouts=stereo[voice]"
     if job.get("music", True):
+        import soundfile as _sf
+        import numpy as _np
         mux_in += ["-i", mus44]
-        vol = float(job.get("music_vol", 1.0))
-        filt += f";[1:a]aresample=44100,aformat=channel_layouts=stereo,volume={vol}[bg];[voice][bg]amix=inputs=2:normalize=0[aout]"
+        vv, _ = _sf.read(conv_wav)
+        mm, _ = _sf.read(mus44)
+        # фон всегда тише голоса: цель = RMS голоса * 0.5 * ползунок
+        ratio = (float(_np.sqrt((vv ** 2).mean())) * 0.5) / (float(_np.sqrt((mm ** 2).mean())) + 1e-9)
+        vol = ratio * float(job.get("music_vol", 1.0))
+        log(f"[cover] баланс: голос {float(_np.sqrt((vv ** 2).mean())):.3f}, фон x{vol:.2f}")
+        filt += f";[1:a]aresample=44100,aformat=channel_layouts=stereo,volume={vol:.3f}[bg];[voice][bg]amix=inputs=2:normalize=0[aout]"
     else:
         filt += ";[voice]acopy[aout]"
     out_mp4 = job.get("out") or os.path.splitext(job["input"])[0] + "_cover.mp4"
