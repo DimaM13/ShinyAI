@@ -53,12 +53,14 @@ class CoverGui:
 
         row = 3
         self.autop_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(f, text="Параметры от Gemma (авто)", variable=self.autop_var).grid(
+        ttk.Checkbutton(f, text="Параметры от Gemma (авто)", variable=self.autop_var,
+                        command=self._toggle_manual).grid(
             row=row, column=0, columnspan=3, sticky="w", pady=2)
         row = 4
         ttk.Label(f, text="Index rate (вручную):").grid(row=row, column=0, sticky="w")
         self.idx_var = tk.DoubleVar(value=0.75)
-        ttk.Scale(f, from_=0.0, to=1.0, variable=self.idx_var, length=200).grid(row=row, column=1, sticky="w")
+        self.idx_scale = ttk.Scale(f, from_=0.0, to=1.0, variable=self.idx_var, length=200)
+        self.idx_scale.grid(row=row, column=1, sticky="w")
         self.idx_lbl = ttk.Label(f, text="0.75")
         self.idx_lbl.grid(row=row, column=2, sticky="w")
         self.idx_var.trace_add("write", lambda *a: self.idx_lbl.config(text=f"{self.idx_var.get():.2f}"))
@@ -66,7 +68,8 @@ class CoverGui:
         row = 5
         ttk.Label(f, text="Protect (вручную):").grid(row=row, column=0, sticky="w")
         self.prot_var = tk.DoubleVar(value=0.33)
-        ttk.Scale(f, from_=0.0, to=0.5, variable=self.prot_var, length=200).grid(row=row, column=1, sticky="w")
+        self.prot_scale = ttk.Scale(f, from_=0.0, to=0.5, variable=self.prot_var, length=200)
+        self.prot_scale.grid(row=row, column=1, sticky="w")
         self.prot_lbl = ttk.Label(f, text="0.33")
         self.prot_lbl.grid(row=row, column=2, sticky="w")
         self.prot_var.trace_add("write", lambda *a: self.prot_lbl.config(text=f"{self.prot_var.get():.2f}"))
@@ -98,11 +101,22 @@ class CoverGui:
         f.rowconfigure(9, weight=1)
         f.columnconfigure(1, weight=1)
         self.show_vtype()
+        self._manual_widgets = [self.idx_scale, self.prot_scale]
+        self._toggle_manual()
         self.root.after(200, self.poll_log)
 
     def show_vtype(self):
         v = self.vmap.get(self.voice_var.get(), {})
         self.vtype_lbl.config(text=f"тип: {v.get('type', '?')}")
+
+    def _toggle_manual(self):
+        # ручные слайдеры активны только когда авто выкл - чтобы не смущали
+        st = "disabled" if self.autop_var.get() else "normal"
+        for w in self._manual_widgets:
+            try:
+                w.config(state=st)
+            except Exception:
+                pass
 
     def pick_video(self):
         p = filedialog.askopenfilename(filetypes=[("Видео", "*.mp4 *.mkv *.avi *.mov *.webm"), ("Все", "*.*")])
