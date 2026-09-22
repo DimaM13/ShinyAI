@@ -43,7 +43,8 @@ def gemma_params(source_desc: str, voice_name: str, voice_type: str,
         f"Source: {source_desc}. Measured median F0 {src_median:.0f} Hz. "
         f"Target voice '{voice_name}' ({voice_type}), transpose {transpose:+d} semitones.\n"
         "Rules: index_rate 0-1 (higher = closer to target timbre; speech 0.6-0.8, "
-        "SONG always 0.3-0.5 or intonation goes robotic; noisy source -> ~0.4). "
+        "SONG 0.4-0.6 - below 0.4 the voice stays like the ORIGINAL, above 0.6 intonation goes robotic; "
+        "noisy source -> ~0.4). "
         "rms_mix_rate 0-1 (1 keeps output dynamics; song -> 0.8). "
         "protect 0-0.5 (speech 0.3, SONG 0.4-0.5 to keep consonants and phrasing)."
     )

@@ -130,6 +130,7 @@ def run_job(job: dict, log=print):
     log("[cover] 3/5 анализ голоса + параметры...")
     v16, _ = librosa.load(voc44, sr=16000, mono=True)
     stats = pitch.source_stats(v16.astype("float32"))
+    is_song = stats["voiced"] > 0.5
     transpose = job.get("transpose")
     if transpose is None:
         transpose = pitch.suggest_transpose(stats["median"], vinfo["type"])
@@ -157,8 +158,9 @@ def run_job(job: dict, log=print):
         mux_in += ["-i", mus44]
         vv, _ = _sf.read(conv_wav)
         mm, _ = _sf.read(mus44)
-        # фон всегда тише голоса: цель = RMS голоса * 0.5 * ползунок
-        ratio = (float(_np.sqrt((vv ** 2).mean())) * 0.5) / (float(_np.sqrt((mm ** 2).mean())) + 1e-9)
+        # фон относительно голоса: песня - музыка важна (0.8), речь - фон тише (0.4)
+        target = 0.8 if is_song else 0.4
+        ratio = (float(_np.sqrt((vv ** 2).mean())) * target) / (float(_np.sqrt((mm ** 2).mean())) + 1e-9)
         vol = ratio * float(job.get("music_vol", 1.0))
         log(f"[cover] баланс: голос {float(_np.sqrt((vv ** 2).mean())):.3f}, фон x{vol:.2f}")
         filt += f";[1:a]aresample=44100,aformat=channel_layouts=stereo,volume={vol:.3f}[bg];[voice][bg]amix=inputs=2:normalize=0[aout]"
