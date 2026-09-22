@@ -9,3 +9,6 @@ output_*.wav
 .venv/
 Qwen3-TTS-streaming/
 tts_test*.log
+cover/_rvc/hubert_rvc.pt
+cover/_rvc/hubert_fairseq_tensors.pt
+refs.txt
