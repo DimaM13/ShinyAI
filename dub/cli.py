@@ -79,11 +79,11 @@ def translate_batch(texts, src: str, dst: str):
     return out
 
 
-def translate_all(segments, src: str, dst: str):
+def translate_all(segments, src: str, dst: str, log=print):
     res = []
     for i in range(0, len(segments), 8):
         chunk = segments[i:i + 8]
-        print(f"[dub] перевод {i + 1}-{i + len(chunk)}/{len(segments)}...")
+        log(f"[dub] перевод {i + 1}-{i + len(chunk)}/{len(segments)}...")
         res.extend(translate_batch([s["text"] for s in chunk], src, dst))
     return res
 
@@ -137,6 +137,70 @@ def mux(video: str, dub_wav: str, out_mp4: str):
          "-shortest", out_mp4])
 
 
+def run_job(job: dict, log=print):
+    """Весь пайплайн одним вызовом. job: input/dst/src/voice/out/bg/lang.
+    Возвращает путь к готовому видео."""
+    import config
+    import settings
+    import tts_voice
+
+    out_mp4 = job.get("out") or os.path.splitext(job["input"])[0] + "_dubbed.mp4"
+    dst, src = job.get("dst", "en"), job.get("src", "auto")
+    synth_lang = {"en": "English", "ru": "Russian"}.get((job.get("lang") or dst).lower(), dst)
+    work = tempfile.mkdtemp(prefix="shyni_dub_")
+    orig_wav = os.path.join(work, "orig.wav")
+
+    log("[dub] 1/5 вытаскиваю аудио...")
+    extract_audio(job["input"], orig_wav)
+    import soundfile as sf
+    total_dur = sf.info(orig_wav).frames / SR
+
+    log("[dub] 2/5 транскрибация...")
+    segments = transcribe(orig_wav, src)
+    if not segments:
+        log("[dub] речи не найдено, нечего дублировать")
+        return None
+
+    log("[dub] 3/5 перевод...")
+    translated = translate_all(segments, src, dst, log=log)
+
+    log("[dub] 4/5 синтез...")
+    model = tts_voice.get_model()
+    voice = job.get("voice", "orig")
+    if voice == "orig":
+        # эталон - первые ~20 сек речи, x-vector (транскрипт не нужен)
+        ref_end = min(20.0, segments[min(2, len(segments) - 1)]["end"])
+        ref_wav = os.path.join(work, "ref.wav")
+        run(["ffmpeg", "-y", "-i", orig_wav, "-ss", "0", "-t", str(ref_end), ref_wav])
+        prompt = model.create_voice_clone_prompt(ref_audio=ref_wav, x_vector_only_mode=True)
+        gen = lambda t: model.generate_voice_clone(
+            text=tts_voice.clean_for_tts(t), language=synth_lang, voice_clone_prompt=prompt)
+    else:
+        if settings.get_base_voice_row(voice) is None:
+            log(f"[dub] нет такого голоса: {voice}")
+            return None
+        prompt = tts_voice.get_clone_prompt(voice)
+        gen = lambda t: model.generate_voice_clone(
+            text=tts_voice.clean_for_tts(t), language=synth_lang, voice_clone_prompt=prompt)
+
+    chunks = []
+    for i, (seg, text) in enumerate(zip(segments, translated)):
+        wavs, sr = gen(text)
+        path = os.path.join(work, f"ch{i:03d}.wav")
+        sf.write(path, wavs[0], sr)
+        chunks.append((path, seg["start"]))
+        log(f"[dub] синтез {i + 1}/{len(segments)}")
+
+    log("[dub] 5/5 укладка по времени и склейка...")
+    dub_wav = os.path.join(work, "dub.wav")
+    bg = float(job.get("bg", 0.0))
+    build_dub_track(chunks, total_dur, dub_wav,
+                    bg_wav=orig_wav if bg > 0 else None, bg_vol=bg)
+    mux(job["input"], dub_wav, out_mp4)
+    log(f"[dub] ГОТОВО: {out_mp4}")
+    return out_mp4
+
+
 def main():
     ap = argparse.ArgumentParser(description="Shyni dub: перевод видео с даббингом")
     ap.add_argument("input", help="входное видео")
@@ -147,62 +211,7 @@ def main():
     ap.add_argument("--bg", type=float, default=0.0, help="громкость оригинала фоном 0-1")
     ap.add_argument("--lang", default=None, help="язык синтеза (по умолч. = dst)")
     args = ap.parse_args()
-
-    import config
-    import settings
-    import tts_voice
-
-    out_mp4 = args.out or os.path.splitext(args.input)[0] + "_dubbed.mp4"
-    synth_lang = {"en": "English", "ru": "Russian"}.get((args.lang or args.dst).lower(), args.dst)
-    work = tempfile.mkdtemp(prefix="shyni_dub_")
-    orig_wav = os.path.join(work, "orig.wav")
-
-    print("[dub] 1/5 вытаскиваю аудио...")
-    extract_audio(args.input, orig_wav)
-    import soundfile as sf
-    total_dur = sf.info(orig_wav).frames / SR
-
-    print("[dub] 2/5 транскрибация...")
-    segments = transcribe(orig_wav, args.src)
-    if not segments:
-        print("[dub] речи не найдено, нечего дублировать")
-        return
-
-    print("[dub] 3/5 перевод...")
-    translated = translate_all(segments, args.src, args.dst)
-
-    print("[dub] 4/5 синтез...")
-    model = tts_voice.get_model()
-    if args.voice == "orig":
-        # эталон - первые ~20 сек речи, x-vector (транскрипт не нужен)
-        ref_end = min(20.0, segments[min(2, len(segments) - 1)]["end"])
-        ref_wav = os.path.join(work, "ref.wav")
-        run(["ffmpeg", "-y", "-i", orig_wav, "-ss", "0", "-t", str(ref_end), ref_wav])
-        prompt = model.create_voice_clone_prompt(ref_audio=ref_wav, x_vector_only_mode=True)
-        gen = lambda t: model.generate_voice_clone(
-            text=tts_voice.clean_for_tts(t), language=synth_lang, voice_clone_prompt=prompt)
-    else:
-        if settings.get_base_voice_row(args.voice) is None:
-            print(f"[dub] нет такого голоса: {args.voice}")
-            return
-        prompt = tts_voice.get_clone_prompt(args.voice)
-        gen = lambda t: model.generate_voice_clone(
-            text=tts_voice.clean_for_tts(t), language=synth_lang, voice_clone_prompt=prompt)
-
-    chunks = []
-    for i, (seg, text) in enumerate(zip(segments, translated)):
-        wavs, sr = gen(text)
-        path = os.path.join(work, f"ch{i:03d}.wav")
-        sf.write(path, wavs[0], sr)
-        chunks.append((path, seg["start"]))
-        print(f"[dub] синтез {i + 1}/{len(segments)}")
-
-    print("[dub] 5/5 укладка по времени и склейка...")
-    dub_wav = os.path.join(work, "dub.wav")
-    build_dub_track(chunks, total_dur, dub_wav,
-                    bg_wav=orig_wav if args.bg > 0 else None, bg_vol=args.bg)
-    mux(args.input, dub_wav, out_mp4)
-    slog(f"[dub] ГОТОВО: {out_mp4}")
+    run_job(vars(args), log=lambda m: slog(m))
 
 
 if __name__ == "__main__":
