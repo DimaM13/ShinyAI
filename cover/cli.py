@@ -169,6 +169,16 @@ def run_job(job: dict, log=print):
          "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy", "-c:a", "aac",
          "-shortest", out_mp4])
     log(f"[cover] ГОТОВО: {out_mp4}")
+    try:
+        import json as _json
+        with open(out_mp4 + ".log", "w", encoding="utf-8") as _f:
+            _f.write(_json.dumps(
+                {"voice": job.get("voice"), "transpose": transpose, "params": params,
+                 "music": job.get("music", True), "music_vol": job.get("music_vol", 1.0),
+                 "src_median_f0": round(stats["median"], 1)},
+                ensure_ascii=False, indent=1))
+    except Exception:
+        pass
     return out_mp4
 
 
