@@ -33,7 +33,10 @@ def slog(msg: str):
 
 
 def run(cmd):
-    subprocess.run(cmd, check=True, capture_output=True)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"ffmpeg fail [{e.returncode}]: {(e.stderr or '')[-500:]}")
 
 
 def extract_audio(video: str, out_wav: str):
