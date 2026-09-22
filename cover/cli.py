@@ -148,6 +148,8 @@ def run_job(job: dict, log=print):
                           ref_level=v16.astype("float32"))
     conv_wav = os.path.join(work, "conv.wav")
     sf.write(conv_wav, out, sr)
+    rvc.unload()  # сразу выгружаем голос из VRAM чтобы не копился
+    log("[cover] голос выгружен из памяти")
 
     log("[cover] 5/5 музыка назад + склейка...")
     # входы ffmpeg: 0=видео, 1=конверт, 2=фон. НЕ ПУТАТЬ: [0:a] это оригинал!
