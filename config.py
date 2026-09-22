@@ -6,9 +6,8 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 
-# Именно gemma-4-31b-it, существует, доступна в AI Studio / Gemini API
-# Dense 31B, контекст 256k, thinking + function calling
-GEMMA_MODEL = os.getenv("GEMMA_MODEL", "gemma-4-31b-it")
+# Быстрый MoE: всего 26B, активных ~4B на запрос. Тот же AI Studio, тот же ключ.
+GEMMA_MODEL = os.getenv("GEMMA_MODEL", "gemma-4-26b-a4b-it")
 
 QWEN_MODEL_ID = os.getenv("QWEN_MODEL_ID", "Qwen/Qwen3-TTS-12Hz-1.7B-Base")
 REF_AUDIO = os.getenv("REF_AUDIO", "voices/shyni_ref.wav")
