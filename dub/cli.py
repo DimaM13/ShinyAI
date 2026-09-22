@@ -27,6 +27,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SR = 24000
 
 
+def slog(msg: str):
+    # в путях бывают эмодзи - консоль cp1251 их не тянет
+    print(str(msg).encode("cp1251", "backslashreplace").decode("cp1251"), flush=True)
+
+
 def run(cmd):
     subprocess.run(cmd, check=True, capture_output=True)
 
@@ -197,7 +202,7 @@ def main():
     build_dub_track(chunks, total_dur, dub_wav,
                     bg_wav=orig_wav if args.bg > 0 else None, bg_vol=args.bg)
     mux(args.input, dub_wav, out_mp4)
-    print(f"[dub] ГОТОВО: {out_mp4}")
+    slog(f"[dub] ГОТОВО: {out_mp4}")
 
 
 if __name__ == "__main__":
