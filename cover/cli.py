@@ -150,8 +150,9 @@ def run_job(job: dict, log=print):
     sf.write(conv_wav, out, sr)
 
     log("[cover] 5/5 музыка назад + склейка...")
+    # входы ffmpeg: 0=видео, 1=конверт, 2=фон. НЕ ПУТАТЬ: [0:a] это оригинал!
     mux_in = ["-i", conv_wav]
-    filt = "[0:a]aresample=44100,aformat=channel_layouts=stereo[voice]"
+    filt = "[1:a]aresample=44100,aformat=channel_layouts=stereo[voice]"
     if job.get("music", True):
         import soundfile as _sf
         import numpy as _np
@@ -163,7 +164,7 @@ def run_job(job: dict, log=print):
         ratio = (float(_np.sqrt((vv ** 2).mean())) * target) / (float(_np.sqrt((mm ** 2).mean())) + 1e-9)
         vol = ratio * float(job.get("music_vol", 1.0))
         log(f"[cover] баланс: голос {float(_np.sqrt((vv ** 2).mean())):.3f}, фон x{vol:.2f}")
-        filt += f";[1:a]aresample=44100,aformat=channel_layouts=stereo,volume={vol:.3f}[bg];[voice][bg]amix=inputs=2:normalize=0[aout]"
+        filt += f";[2:a]aresample=44100,aformat=channel_layouts=stereo,volume={vol:.3f}[bg];[voice][bg]amix=inputs=2:normalize=0[aout]"
     else:
         filt += ";[voice]acopy[aout]"
     out_mp4 = job.get("out") or os.path.splitext(job["input"])[0] + "_cover.mp4"
