@@ -123,11 +123,12 @@ def get_model():
 def get_clone_prompt(name: str):
     if name not in _clone_prompts:
         row = settings.get_base_voice_row(name) or settings.get_base_voice_row("shyni")
-        ref_audio, ref_text = row[0], row[1]
+        ref_audio = row[0]
         m = get_model()
+        # x-vector: только тембр, ref_text игнорируется (транскрипты больше не важны)
         _clone_prompts[name] = m.create_voice_clone_prompt(
             ref_audio=ref_audio,
-            ref_text=ref_text,
+            x_vector_only_mode=True,
         )
     return _clone_prompts[name]
 
