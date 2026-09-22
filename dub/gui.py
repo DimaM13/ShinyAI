@@ -76,18 +76,22 @@ class DubGui:
         ttk.Entry(f, textvariable=self.out_var, width=55).grid(row=row, column=1, sticky="ew")
         ttk.Button(f, text="...", width=3, command=self.pick_out).grid(row=row, column=2)
 
+        self.resynth_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(f, text="Перегенерировать вылезшие куски (дольше, точнее)",
+                        variable=self.resynth_var).grid(row=7, column=0, columnspan=3, sticky="w", pady=2)
+
         # кнопки
-        row = 7
+        row = 8
         self.start_btn = ttk.Button(f, text="▶ Дублировать", command=self.start)
         self.start_btn.grid(row=row, column=0, columnspan=2, pady=8, sticky="ew")
         self.open_btn = ttk.Button(f, text="Открыть результат", command=self.open_result, state="disabled")
         self.open_btn.grid(row=row, column=2, pady=8)
 
         # лог
-        row = 8
+        row = 9
         self.log = tk.Text(f, height=14, state="disabled")
         self.log.grid(row=row, column=0, columnspan=3, sticky="nsew")
-        f.rowconfigure(8, weight=1)
+        f.rowconfigure(9, weight=1)
         f.columnconfigure(1, weight=1)
 
         self.root.after(200, self.poll_log)
@@ -151,6 +155,7 @@ class DubGui:
             "out": self.out_var.get().strip() or None,
             "bg": round(self.bg_var.get(), 2),
             "lang": slang,
+            "resynth": bool(self.resynth_var.get()),
         }
         self.start_btn.config(state="disabled")
         self.open_btn.config(state="disabled")

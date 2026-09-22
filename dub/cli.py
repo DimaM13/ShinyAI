@@ -58,17 +58,28 @@ def transcribe(wav: str, src: str):
     return out
 
 
-def translate_batch(texts, src: str, dst: str, tries: int = 8):
+def translate_batch(texts, src: str, dst: str, budgets=None, tries: int = 8):
     from google import genai
     from google.genai import types
     import config
     import time
     client = genai.Client(api_key=config.GOOGLE_API_KEY)
     numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
-    prompt = (
-        f"Translate from {src} to {dst}. Keep each line short, similar length to source, "
-        f"no explanations. Return ONLY the numbered lines in the same format 'N. text'.\n{numbered}"
-    )
+    limits = ""
+    if budgets:
+        limits = ("\nHard length limits (MAX characters per line, cut adjectives/filler but keep meaning): "
+                  + ", ".join(f"{i + 1}:{b}" for i, b in enumerate(budgets)) + "\n")
+        prompt = (
+            f"Translate from {src} to {dst}. Each line MUST fit its character limit - "
+            f"this is voiceover timing, shorter is fine, longer is broken. "
+            f"No explanations. Return ONLY the numbered lines in the same format 'N. text'.\n"
+            f"{limits}{numbered}"
+        )
+    else:
+        prompt = (
+            f"Translate from {src} to {dst}. Keep each line short, similar length to source, "
+            f"no explanations. Return ONLY the numbered lines in the same format 'N. text'.\n{numbered}"
+        )
     last = None
     for attempt in range(1, tries + 1):
         try:
@@ -98,37 +109,86 @@ def translate_batch(texts, src: str, dst: str, tries: int = 8):
     return out
 
 
+CPS = 14  # символов/сек русского синтеза - из него бюджет строки
+MAX_TEMPO = 1.4  # выше не ускоряем чтобы не было бурундука, остаток режем
+RESYNTH_RATIO = 1.6  # вылез сильнее - просим короче и перегенерим (флаг --resynth)
+
+
+def slot_of(segments, i: int) -> float:
+    end = segments[i + 1]["start"] if i + 1 < len(segments) else segments[i]["end"]
+    return max(0.5, end - segments[i]["start"])
+
+
 def translate_all(segments, src: str, dst: str, log=print):
     res = []
     for i in range(0, len(segments), 8):
         chunk = segments[i:i + 8]
+        budgets = [int(slot_of(segments, j) * CPS) for j in range(i, i + len(chunk))]
         log(f"[dub] перевод {i + 1}-{i + len(chunk)}/{len(segments)}...")
-        res.extend(translate_batch([s["text"] for s in chunk], src, dst))
+        res.extend(translate_batch([s["text"] for s in chunk], src, dst, budgets=budgets))
     return res
 
 
-def fit_filter(tts_dur: float, seg_dur: float) -> str:
-    """Подгонка чанка строго под слот сегмента:
-    длиннее - ускоряем (макс 2x) и жестко режем хвост, короче - добиваем тишиной."""
+def shorten_text(text: str, budget: int, dst: str) -> str:
+    """Одна попытка ужаться: просим Gemma короче под бюджет символов."""
+    from google import genai
+    from google.genai import types
+    import config
+    import time
+    client = genai.Client(api_key=config.GOOGLE_API_KEY)
+    last = text
+    for attempt in range(1, 4):
+        try:
+            resp = client.models.generate_content(
+                model=config.GEMMA_MODEL,
+                config=types.GenerateContentConfig(
+                    temperature=0.3,
+                    max_output_tokens=300,
+                    thinking_config=types.ThinkingConfig(thinking_level="MINIMAL"),
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                ),
+                contents=(f"Shorten this {dst} voiceover line to at most {budget} characters, "
+                          f"keep the core meaning. Output ONLY the shortened line, nothing else.\n{last}"),
+            )
+            cand = (resp.text or "").strip()
+            if cand:
+                return cand
+        except Exception:
+            time.sleep(min(3 * attempt, 10))
+    return last
+
+
+def fit_filter(tts_dur: float, seg_dur: float) -> tuple:
+    """Подгонка чанка строго под слот. Возвращает (фильтр, пожат_ли).
+    Ускорение capped MAX_TEMPO чтобы не было бурундука, остаток режем."""
     if tts_dur > seg_dur * 1.05:
-        return f"atempo={min(tts_dur / seg_dur, 2.0):.3f},atrim=0:{seg_dur:.3f},asetpts=PTS-STARTPTS"
+        ratio = min(tts_dur / seg_dur, MAX_TEMPO)
+        squeezed = tts_dur / seg_dur > MAX_TEMPO
+        return f"atempo={ratio:.3f},atrim=0:{seg_dur:.3f},asetpts=PTS-STARTPTS", squeezed
     if tts_dur < seg_dur * 0.9:
-        return f"apad=whole_dur={seg_dur:.3f},asetpts=PTS-STARTPTS"
-    return "anull,asetpts=PTS-STARTPTS"
+        return f"apad=whole_dur={seg_dur:.3f},asetpts=PTS-STARTPTS", False
+    return "anull,asetpts=PTS-STARTPTS", False
 
 
-def build_dub_track(chunks, total_dur: float, out_wav: str, bg_wav=None, bg_vol: float = 0.0):
+def build_dub_track(chunks, total_dur: float, out_wav: str, bg_wav=None, bg_vol: float = 0.0, log=print):
     """chunks: [(wav_path, start_sec)]. Каждый стартует в свое время."""
     import soundfile as sf
     inputs, filters, mix = [], [], []
+    squeezed_n = 0
     for i, (path, start) in enumerate(chunks):
         inputs += ["-i", path]
         info = sf.info(path)
         seg_end = chunks[i + 1][1] if i + 1 < len(chunks) else total_dur
         seg_dur = max(0.3, seg_end - start)
         dur = info.frames / info.samplerate
-        filters.append(f"[{i}:a]{fit_filter(dur, seg_dur)},adelay={int(start * 1000)}|{int(start * 1000)}[a{i}]")
+        filt, squeezed = fit_filter(dur, seg_dur)
+        if squeezed:
+            squeezed_n += 1
+            log(f"[dub] кусок {i + 1}: перевод длиннее слота, ускорен {MAX_TEMPO}x + резан")
+        filters.append(f"[{i}:a]{filt},adelay={int(start * 1000)}|{int(start * 1000)}[a{i}]")
         mix.append(f"[a{i}]")
+    if squeezed_n:
+        log(f"[dub] пожато кусков: {squeezed_n}/{len(chunks)}")
     n = len(chunks)
     if bg_wav and bg_vol > 0:
         inputs += ["-i", bg_wav]
@@ -193,8 +253,17 @@ def run_job(job: dict, log=print):
             text=tts_voice.clean_for_tts(t), language=synth_lang, voice_clone_prompt=prompt)
 
     chunks = []
+    resynth = bool(job.get("resynth", False))
     for i, (seg, text) in enumerate(zip(segments, translated)):
+        slot = slot_of(segments, i)
         wavs, sr = gen(text)
+        dur = len(wavs[0]) / sr
+        if resynth and dur > slot * RESYNTH_RATIO:
+            budget = int(slot * CPS)
+            log(f"[dub] кусок {i + 1}: вылез ({dur:.1f}с в слот {slot:.1f}с), прошу короче...")
+            text2 = shorten_text(text, budget, dst)
+            wavs, sr = gen(text2)
+            log(f"[dub] кусок {i + 1}: перегенерил ({len(wavs[0]) / sr:.1f}с)")
         path = os.path.join(work, f"ch{i:03d}.wav")
         sf.write(path, wavs[0], sr)
         chunks.append((path, seg["start"]))
@@ -204,7 +273,7 @@ def run_job(job: dict, log=print):
     dub_wav = os.path.join(work, "dub.wav")
     bg = float(job.get("bg", 0.0))
     build_dub_track(chunks, total_dur, dub_wav,
-                    bg_wav=orig_wav if bg > 0 else None, bg_vol=bg)
+                    bg_wav=orig_wav if bg > 0 else None, bg_vol=bg, log=log)
     mux(job["input"], dub_wav, out_mp4)
     log(f"[dub] ГОТОВО: {out_mp4}")
     return out_mp4
@@ -219,6 +288,8 @@ def main():
     ap.add_argument("--out", default=None, help="выходное видео (по умолч. input_dubbed.mp4)")
     ap.add_argument("--bg", type=float, default=0.0, help="громкость оригинала фоном 0-1")
     ap.add_argument("--lang", default=None, help="язык синтеза (по умолч. = dst)")
+    ap.add_argument("--resynth", action="store_true",
+                    help="вылезшие куски (>1.6x слота) сократить через Gemma и перегенерить")
     args = ap.parse_args()
     run_job(vars(args), log=lambda m: slog(m))
 
