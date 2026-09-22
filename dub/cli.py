@@ -158,6 +158,53 @@ def shorten_text(text: str, budget: int, dst: str) -> str:
     return last
 
 
+def separate_music(wav: str, work: str) -> str | None:
+    """Demucs: вытащить фон без голоса. Возвращает путь к no_vocals (SR/моно) или None."""
+    out_dir = os.path.join(work, "demucs_out")
+    cmd = [sys.executable, "-m", "demucs", "--two-stems", "vocals", "-o", out_dir, wav]
+    try:
+        subprocess.run(cmd + ["-d", "cuda"], check=True, capture_output=True)
+    except Exception:
+        subprocess.run(cmd + ["-d", "cpu"], check=True, capture_output=True)
+    cands = []
+    for root, _, files in os.walk(out_dir):
+        if "no_vocals.wav" in files:
+            cands.append(os.path.join(root, "no_vocals.wav"))
+    if not cands:
+        return None
+    bed = os.path.join(work, "music_bed.wav")
+    run(["ffmpeg", "-y", "-i", cands[0], "-ar", str(SR), "-ac", "1", bed])
+    return bed
+
+
+def merge_semantic(segments, max_gap: float = 1.2, max_dur: float = 12.0):
+    """Склеить мелкие сегменты whisper в куски по смыслу: копим до конца
+    предложения (.?!…), короткие подтягиваем к следующему."""
+    import re
+    END = re.compile(r"[.!?…]+$")
+    chunks, cur = [], None
+    for s in segments:
+        gap = s["start"] - (cur["end"] if cur else s["start"])
+        if cur is None or (gap > max_gap and END.search(cur["text"].strip())):
+            if cur:
+                chunks.append(cur)
+            cur = dict(s)
+        else:
+            cur["end"] = s["end"]
+            cur["text"] = (cur["text"] + " " + s["text"]).strip()
+        if cur["end"] - cur["start"] >= max_dur and END.search(cur["text"].strip()):
+            chunks.append(cur)
+            cur = None
+    if cur:
+        chunks.append(cur)
+    # последний короткий огрызок приклеиваем к предыдущему
+    if len(chunks) >= 2 and chunks[-1]["end"] - chunks[-1]["start"] < 1.0:
+        prev = chunks.pop()
+        chunks[-1]["end"] = prev["end"]
+        chunks[-1]["text"] = (chunks[-1]["text"] + " " + prev["text"]).strip()
+    return chunks
+
+
 def fit_filter(tts_dur: float, seg_dur: float) -> tuple:
     """Подгонка чанка строго под слот. Возвращает (фильтр, пожат_ли).
     Ускорение capped MAX_TEMPO чтобы не было бурундука, остаток режем."""
@@ -229,6 +276,15 @@ def run_job(job: dict, log=print):
     if not segments:
         log("[dub] речи не найдено, нечего дублировать")
         return None
+    if job.get("semantic", False):
+        before = len(segments)
+        segments = merge_semantic(segments)
+        log(f"[dub] семант-куски: {before} -> {len(segments)}")
+    bed = None
+    if job.get("music", False):
+        log("[dub] 2.5/5 отделяю музыку (demucs)...")
+        bed = separate_music(orig_wav, work)
+        log("[dub] музыка: " + ("готова" if bed else "не вышла, без фона"))
 
     log("[dub] 3/5 перевод...")
     translated = translate_all(segments, src, dst, log=log)
@@ -272,8 +328,11 @@ def run_job(job: dict, log=print):
     log("[dub] 5/5 укладка по времени и склейка...")
     dub_wav = os.path.join(work, "dub.wav")
     bg = float(job.get("bg", 0.0))
-    build_dub_track(chunks, total_dur, dub_wav,
-                    bg_wav=orig_wav if bg > 0 else None, bg_vol=bg, log=log)
+    if bed:
+        build_dub_track(chunks, total_dur, dub_wav, bg_wav=bed, bg_vol=1.0, log=log)
+    else:
+        build_dub_track(chunks, total_dur, dub_wav,
+                        bg_wav=orig_wav if bg > 0 else None, bg_vol=bg, log=log)
     mux(job["input"], dub_wav, out_mp4)
     log(f"[dub] ГОТОВО: {out_mp4}")
     return out_mp4
@@ -290,6 +349,10 @@ def main():
     ap.add_argument("--lang", default=None, help="язык синтеза (по умолч. = dst)")
     ap.add_argument("--resynth", action="store_true",
                     help="вылезшие куски (>1.6x слота) сократить через Gemma и перегенерить")
+    ap.add_argument("--music", action="store_true",
+                    help="музыка/эффекты из оригинала фоном (demucs, без голоса)")
+    ap.add_argument("--semantic", action="store_true",
+                    help="клеить мелкие сегменты в куски по смыслу (по концу предложений)")
     args = ap.parse_args()
     run_job(vars(args), log=lambda m: slog(m))
 

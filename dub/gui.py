@@ -79,19 +79,25 @@ class DubGui:
         self.resynth_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(f, text="Перегенерировать вылезшие куски (дольше, точнее)",
                         variable=self.resynth_var).grid(row=7, column=0, columnspan=3, sticky="w", pady=2)
+        self.music_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(f, text="Музыка/эффекты из оригинала фоном (demucs)",
+                        variable=self.music_var).grid(row=8, column=0, columnspan=3, sticky="w", pady=2)
+        self.semantic_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(f, text="Куски по смыслу, а не по паузам",
+                        variable=self.semantic_var).grid(row=9, column=0, columnspan=3, sticky="w", pady=2)
 
         # кнопки
-        row = 8
+        row = 10
         self.start_btn = ttk.Button(f, text="▶ Дублировать", command=self.start)
         self.start_btn.grid(row=row, column=0, columnspan=2, pady=8, sticky="ew")
         self.open_btn = ttk.Button(f, text="Открыть результат", command=self.open_result, state="disabled")
         self.open_btn.grid(row=row, column=2, pady=8)
 
         # лог
-        row = 9
-        self.log = tk.Text(f, height=14, state="disabled")
+        row = 11
+        self.log = tk.Text(f, height=12, state="disabled")
         self.log.grid(row=row, column=0, columnspan=3, sticky="nsew")
-        f.rowconfigure(9, weight=1)
+        f.rowconfigure(11, weight=1)
         f.columnconfigure(1, weight=1)
 
         self.root.after(200, self.poll_log)
@@ -156,6 +162,8 @@ class DubGui:
             "bg": round(self.bg_var.get(), 2),
             "lang": slang,
             "resynth": bool(self.resynth_var.get()),
+            "music": bool(self.music_var.get()),
+            "semantic": bool(self.semantic_var.get()),
         }
         self.start_btn.config(state="disabled")
         self.open_btn.config(state="disabled")
