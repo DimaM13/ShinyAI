@@ -34,7 +34,10 @@ def slog(msg: str):
 
 def run(cmd):
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        # encoding utf-8 + replace: вывод ffmpeg может содержать эмодзи из имен файлов,
+        # штатная cp1251 на них падает с UnicodeDecodeError в потоке чтения
+        subprocess.run(cmd, check=True, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"ffmpeg fail [{e.returncode}]: {(e.stderr or '')[-500:]}")
 
