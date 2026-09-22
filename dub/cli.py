@@ -101,24 +101,14 @@ def translate_all(segments, src: str, dst: str, log=print):
     return res
 
 
-def atempo_chain(ratio: float) -> str:
-    """atempo держит 0.5-2.0 за раз, цепочкой покрываем шире."""
-    parts = []
-    r = max(0.5, min(2.0, ratio))
-    while r > 2.0:
-        parts.append("atempo=2.0")
-        r /= 2.0
-    parts.append(f"atempo={r:.3f}")
-    return ",".join(parts)
-
-
 def fit_filter(tts_dur: float, seg_dur: float) -> str:
-    """Фильтр подгонки чанка под длительность сегмента."""
+    """Подгонка чанка строго под слот сегмента:
+    длиннее - ускоряем (макс 2x) и жестко режем хвост, короче - добиваем тишиной."""
     if tts_dur > seg_dur * 1.05:
-        return atempo_chain(tts_dur / seg_dur)
+        return f"atempo={min(tts_dur / seg_dur, 2.0):.3f},atrim=0:{seg_dur:.3f},asetpts=PTS-STARTPTS"
     if tts_dur < seg_dur * 0.9:
-        return f"apad=whole_dur={seg_dur:.3f}"
-    return "anull"
+        return f"apad=whole_dur={seg_dur:.3f},asetpts=PTS-STARTPTS"
+    return "anull,asetpts=PTS-STARTPTS"
 
 
 def build_dub_track(chunks, total_dur: float, out_wav: str, bg_wav=None, bg_vol: float = 0.0):
