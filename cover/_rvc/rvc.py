@@ -9,12 +9,47 @@ from .rvclib.models import SynthesizerTrnMs768NSFsid, SynthesizerTrnMs768NSFsid_
 from . import pipe
 
 _cache = {}
+_current_key = None
+
+
+def unload():
+    """Выгрузить RVC-модель из VRAM (при смене голоса). Hubert общий - остается."""
+    global _current_key
+    for key in list(_cache.keys()):
+        try:
+            del _cache[key]["net"]
+        except Exception:
+            pass
+        del _cache[key]
+    _current_key = None
+    import gc
+    gc.collect()
+    try:
+        import torch
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    except Exception:
+        pass
+    print("[rvc] модель выгружена")
+
+
+def vram_free_gb() -> float:
+    try:
+        import torch
+        free, _ = torch.cuda.mem_get_info()
+        return free / 1024 ** 3
+    except Exception:
+        return 0.0
 
 
 def load(model_path: str, index_path: str | None = None, device: str = "cuda:0", is_half: bool = True):
+    global _current_key
     key = (model_path, device, is_half)
     if key in _cache:
         return _cache[key]
+    if _current_key is not None:
+        print(f"[rvc] смена голоса - выгружаю предыдущий ({vram_free_gb():.1f}GB свободно)")
+        unload()
     cpt = torch.load(model_path, map_location="cpu")
     cfg = list(cpt["config"])
     cfg[-3] = cpt["weight"]["emb_g.weight"].shape[0]
@@ -36,6 +71,7 @@ def load(model_path: str, index_path: str | None = None, device: str = "cuda:0",
     pack = {"net": net_g, "tgt_sr": tgt_sr, "index": index,
             "index_vecs": index_vecs, "if_f0": if_f0, "device": device, "is_half": is_half}
     _cache[key] = pack
+    _current_key = key
     n = sum(p.numel() for p in net_g.parameters()) / 1e6
     print(f"[rvc] модель {os.path.basename(model_path)}: {n:.1f}M params, sr={tgt_sr}, f0={if_f0}")
     return pack
