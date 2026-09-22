@@ -65,6 +65,9 @@ def translate_batch(texts, src: str, dst: str, budgets=None, tries: int = 8):
     import time
     client = genai.Client(api_key=config.GOOGLE_API_KEY)
     numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
+    num_rule = (f"Write all numbers, versions and dotted abbreviations as full WORDS in {dst} "
+                f"(4.7 -> four seven, 20% -> twenty percent) - TTS mangles digits and dots inside words. "
+                f"Keep normal sentence punctuation as is. ")
     limits = ""
     if budgets:
         limits = ("\nHard length limits (MAX characters per line, cut adjectives/filler but keep meaning): "
@@ -72,13 +75,15 @@ def translate_batch(texts, src: str, dst: str, budgets=None, tries: int = 8):
         prompt = (
             f"Translate from {src} to {dst}. Each line MUST fit its character limit - "
             f"this is voiceover timing, shorter is fine, longer is broken. "
+            f"{num_rule}"
             f"No explanations. Return ONLY the numbered lines in the same format 'N. text'.\n"
             f"{limits}{numbered}"
         )
     else:
         prompt = (
-            f"Translate from {src} to {dst}. Keep each line short, similar length to source, "
-            f"no explanations. Return ONLY the numbered lines in the same format 'N. text'.\n{numbered}"
+            f"Translate from {src} to {dst}. Keep each line short, similar length to source. "
+            f"{num_rule}"
+            f"No explanations. Return ONLY the numbered lines in the same format 'N. text'.\n{numbered}"
         )
     last = None
     for attempt in range(1, tries + 1):
