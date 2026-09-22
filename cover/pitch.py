@@ -23,7 +23,8 @@ def source_stats(vocals_16k: np.ndarray) -> dict:
 def suggest_transpose(src_median: float, target_type: str) -> int:
     tgt = TYPE_F0.get(target_type, 220.0)
     st = int(round(12 * math.log2(tgt / max(50.0, src_median))))
-    return max(-12, min(12, st))
+    # больше ±6 сдвиг рвет качество (проверено: -8 на Girl дало кашу)
+    return max(-6, min(6, st))
 
 
 def gemma_params(source_desc: str, voice_name: str, voice_type: str,
