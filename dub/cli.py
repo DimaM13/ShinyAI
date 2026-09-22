@@ -17,10 +17,13 @@
   .\\.venv\\Scripts\\python.exe dub\\cli.py input.mp4 --dst ru --voice kira --out out.mp4
 """
 import argparse
+import faulthandler
 import os
 import subprocess
 import sys
 import tempfile
+
+faulthandler.enable()
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

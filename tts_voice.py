@@ -3,6 +3,9 @@ import os
 os.environ.setdefault("TORCHDYNAMO_VERBOSE", "0")
 os.environ.setdefault("TORCH_LOGS", "-all")
 os.environ.setdefault("TORCHDYNAMO_REPRO_LEVEL", "0")
+# expandable_segments: меньше падений от фрагментации VRAM на 8GB
+# (это прямо советует текст OOM-ошибки PyTorch)
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 # Постоянный кэш компиляции: без него каждый рестарт компилирует заново (~1 мин).
 # Вне OneDrive чтобы гигабайты кэша не синкались в облако.
 os.environ.setdefault(
