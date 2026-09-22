@@ -29,6 +29,47 @@ def change_rms(data1, sr1, data2, sr2, rate):
     return data2
 
 
+def medfilt_voiced(f0: np.ndarray, k: int = 5) -> np.ndarray:
+    """Медиана от октавных скачков, нули (паузы) не трогаем."""
+    from scipy.signal import medfilt
+    v = f0 > 1
+    if v.sum() > k:
+        f = f0.copy()
+        f[v] = medfilt(f[v], kernel_size=k if k % 2 else k + 1)
+        return f
+    return f0
+
+
+def to_coarse(f0bak: np.ndarray):
+    mel = 1127 * np.log(1 + f0bak / 700)
+    mel[mel > 0] = (mel[mel > 0] - F0_MEL_MIN) * 254 / (F0_MEL_MAX - F0_MEL_MIN) + 1
+    mel[mel <= 1] = 1
+    mel[mel > 255] = 255
+    return np.rint(mel).astype(np.int32)
+
+
+def _fit_len(f0: np.ndarray, p_len: int, transpose: int):
+    f0 = medfilt_voiced(f0.astype(np.float32)) * pow(2, transpose / 12)
+    if len(f0) < p_len:
+        f0 = np.pad(f0, (0, p_len - len(f0)), mode="edge")
+    else:
+        f0 = f0[:p_len]
+    return f0.copy(), f0.copy()
+
+
+def f0_rmvpe(x_16k: np.ndarray, p_len: int, transpose: int = 0):
+    """RMVPE (бандловый onnx) -> (coarse, f0bak). Для песен точнее pyin."""
+    from . import rmvpe_onnx
+    f0 = rmvpe_onnx.infer(x_16k)
+    voiced = f0 > 1
+    if voiced.sum() >= 2:
+        f0[~voiced] = np.interp(np.where(~voiced)[0], np.where(voiced)[0], f0[voiced])
+    else:
+        f0 = np.nan_to_num(f0, nan=110.0)
+    coarse, bak = _fit_len(f0, p_len, transpose)
+    return to_coarse(coarse), bak
+
+
 def f0_pyin(x_16k: np.ndarray, p_len: int, transpose: int = 0):
     """pyin -> (coarse(1-255), f0bak float), длина p_len."""
     f0, _, _ = librosa.pyin(x_16k, fmin=F0_MIN, fmax=F0_MAX, sr=16000)
@@ -39,23 +80,15 @@ def f0_pyin(x_16k: np.ndarray, p_len: int, transpose: int = 0):
         f0[~voiced] = np.interp(np.where(~voiced)[0], np.where(voiced)[0], f0[voiced])
     else:
         f0 = np.nan_to_num(f0, nan=110.0)
-    f0 = f0.astype(np.float32) * pow(2, transpose / 12)
-    if len(f0) < p_len:
-        f0 = np.pad(f0, (0, p_len - len(f0)), mode="edge")
-    else:
-        f0 = f0[:p_len]
-    f0bak = f0.copy()
-    mel = 1127 * np.log(1 + f0 / 700)
-    mel[mel > 0] = (mel[mel > 0] - F0_MEL_MIN) * 254 / (F0_MEL_MAX - F0_MEL_MIN) + 1
-    mel[mel <= 1] = 1
-    mel[mel > 255] = 255
-    return np.rint(mel).astype(np.int32), f0bak
+    coarse, bak = _fit_len(f0, p_len, transpose)
+    return to_coarse(coarse), bak
 
 
 @torch.no_grad()
 def convert_chunk(net_g, sid: int, audio_16k: np.ndarray, transpose: int,
                   index, index_vectors, index_rate: float, protect: float,
-                  rms_mix_rate: float, device: str, is_half: bool):
+                  rms_mix_rate: float, device: str, is_half: bool,
+                  f0_method: str = "rmvpe"):
     audio = signal.filtfilt(bh, ah, audio_16k.astype(np.float32))
     pad = 16000 // 2
     audio_pad = np.pad(audio, (pad, pad), mode="reflect")
@@ -67,7 +100,14 @@ def convert_chunk(net_g, sid: int, audio_16k: np.ndarray, transpose: int,
         feats0 = feats.clone()
 
     p_len = audio_pad.shape[0] // WINDOW
-    pitch_c, pitch_f = f0_pyin(audio_pad, p_len, transpose)
+    if f0_method == "rmvpe":
+        try:
+            pitch_c, pitch_f = f0_rmvpe(audio_pad, p_len, transpose)
+        except Exception as e:
+            print(f"[rvc] rmvpe упал ({e}), падаю на pyin")
+            pitch_c, pitch_f = f0_pyin(audio_pad, p_len, transpose)
+    else:
+        pitch_c, pitch_f = f0_pyin(audio_pad, p_len, transpose)
     pitch = torch.tensor(pitch_c, device=device).unsqueeze(0).long()
     pitchf = torch.tensor(pitch_f, device=device).unsqueeze(0).float()
 

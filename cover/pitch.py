@@ -41,9 +41,10 @@ def gemma_params(source_desc: str, voice_name: str, voice_type: str,
         "with one-line reason per key in plain text after JSON.\n"
         f"Source: {source_desc}. Measured median F0 {src_median:.0f} Hz. "
         f"Target voice '{voice_name}' ({voice_type}), transpose {transpose:+d} semitones.\n"
-        "Rules: index_rate 0-1 (higher = closer to target timbre, 0.75 default; noisy source -> lower ~0.4). "
+        "Rules: index_rate 0-1 (higher = closer to target timbre; speech 0.6-0.8, "
+        "SONG always 0.3-0.5 or intonation goes robotic; noisy source -> ~0.4). "
         "rms_mix_rate 0-1 (1 keeps output dynamics; song -> 0.8). "
-        "protect 0-0.5 (lower keeps consonants, 0.33 default; breathy/song -> 0.15)."
+        "protect 0-0.5 (speech 0.3, SONG 0.4-0.5 to keep consonants and phrasing)."
     )
     resp = client.models.generate_content(
         model=config.GEMMA_MODEL,
