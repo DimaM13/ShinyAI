@@ -57,8 +57,11 @@ def split_silence(audio_16k: np.ndarray, max_len_s: float = 60.0):
 
 
 def convert(pack, audio_16k: np.ndarray, transpose: int = 0, index_rate: float = 0.75,
-            rms_mix_rate: float = 1.0, protect: float = 0.33) -> tuple[np.ndarray, int]:
-    """Вход моно 16k float32. Выход (моно float32, tgt_sr)."""
+            rms_mix_rate: float = 1.0, protect: float = 0.33,
+            ref_level: np.ndarray | None = None) -> tuple[np.ndarray, int]:
+    """Вход моно 16k float32. Выход (моно float32, tgt_sr).
+    ref_level: оригинал вокала - подгоняем громкость выхода под его RMS (иначе
+    RVC тихий и тонет в музыке). Усиление capped x6 чтобы не разогнать шум."""
     out = []
     for s, e in split_silence(audio_16k):
         y = pipe.convert_chunk(
@@ -68,6 +71,15 @@ def convert(pack, audio_16k: np.ndarray, transpose: int = 0, index_rate: float =
         )
         out.append(y)
     audio = np.concatenate(out).astype(np.float32)
+    if ref_level is not None and len(ref_level) > 100:
+        import librosa
+        probe = librosa.resample(audio, orig_sr=pack["tgt_sr"], target_sr=16000)
+        n = min(len(probe), len(ref_level))
+        rms_out = float(np.sqrt((probe[:n] ** 2).mean()) + 1e-9)
+        rms_ref = float(np.sqrt((ref_level[:n] ** 2).mean()) + 1e-9)
+        gain = min(rms_ref / rms_out, 6.0)
+        audio = audio * gain
+        print(f"[rvc] gain x{gain:.2f} под уровень оригинала")
     peak = np.abs(audio).max()
     if peak > 0.99:
         audio = audio / peak * 0.99

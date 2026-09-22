@@ -21,23 +21,87 @@ def run(cmd):
         raise RuntimeError(f"ffmpeg fail [{e.returncode}]: {(e.stderr or '')[-500:]}")
 
 
-def separate(vocals_wav_44k: str, work: str):
-    """demucs -> (vocals_44k, music_44k)."""
-    out_dir = os.path.join(work, "demucs_out")
-    cmd = [sys.executable, "-m", "demucs", "--two-stems", "vocals", "-o", out_dir, vocals_wav_44k]
+def vram_free_gb() -> float:
     try:
-        subprocess.run(cmd + ["-d", "cuda"], check=True, capture_output=True)
+        import torch
+        free, _ = torch.cuda.mem_get_info()
+        return free / 1024 ** 3
     except Exception:
-        subprocess.run(cmd + ["-d", "cpu"], check=True, capture_output=True)
-    voc = mus = None
-    for root, _, files in os.walk(out_dir):
-        if "vocals.wav" in files:
-            voc = os.path.join(root, "vocals.wav")
-        if "no_vocals.wav" in files:
-            mus = os.path.join(root, "no_vocals.wav")
-    if not voc or not mus:
-        raise RuntimeError("demucs не отдал дорожки")
-    return voc, mus
+        return 0.0
+
+
+def split_wav(path: str, work: str, max_s: float = 150.0):
+    """Нарезка на куски по тишине чтобы demucs не лопнул память на длинном."""
+    import soundfile as sf
+    import librosa
+    d, sr = sf.read(path)
+    mono = librosa.to_mono(d.T) if d.ndim > 1 else d
+    y16 = librosa.resample(mono, orig_sr=sr, target_sr=16000)
+    intervals = librosa.effects.split(y16, top_db=40)
+    cuts, start = [0], 0
+    for s, e in intervals:
+        t0, t1 = s / 16000, e / 16000
+        if t1 - start >= max_s:
+            cuts.append(t0)
+            start = t0
+    cuts.append(len(y16) / 16000)
+    paths = []
+    for i, (a, b) in enumerate(zip(cuts[:-1], cuts[1:])):
+        if b - a < 1.0:
+            continue
+        p = os.path.join(work, f"part{i:02d}.wav")
+        run(["ffmpeg", "-y", "-v", "error", "-i", path, "-ss", f"{a:.2f}", "-t", f"{b - a:.2f}", p])
+        paths.append(p)
+    return paths or [path]
+
+
+def demucs_one(wav: str, out_dir: str, device: str):
+    cmd = [sys.executable, "-m", "demucs", "--two-stems", "vocals",
+           "-o", out_dir, "-d", device, wav]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
+def separate(wav: str, work: str, log=print) -> tuple[str | None, str | None]:
+    """Demucs по кускам: целые альбомы не роняют GPU/ОЗУ. Возвращает (vocals, music)."""
+    parts = split_wav(wav, work)
+    log(f"[cover] demucs кусков: {len(parts)}")
+    vocs, muss = [], []
+    for i, part in enumerate(parts):
+        out_dir = os.path.join(work, f"demucs_{i:02d}")
+        free = vram_free_gb()
+        dev = "cuda" if free >= 2.5 else "cpu"
+        if dev == "cpu":
+            log(f"[cover] VRAM {free:.1f}GB - demucs на CPU (медленно, зато без вылета; останови бота чтобы было быстрее)")
+        try:
+            demucs_one(part, out_dir, dev)
+        except Exception:
+            if dev == "cuda":
+                log("[cover] cuda не взлетел, пробую CPU...")
+                demucs_one(part, out_dir, "cpu")
+            else:
+                raise
+        hit_v = hit_m = None
+        for root, _, files in os.walk(out_dir):
+            if "vocals.wav" in files:
+                hit_v = os.path.join(root, "vocals.wav")
+            if "no_vocals.wav" in files:
+                hit_m = os.path.join(root, "no_vocals.wav")
+        if not hit_v or not hit_m:
+            raise RuntimeError("demucs не отдал дорожки")
+        vocs.append(hit_v)
+        muss.append(hit_m)
+
+    def concat(files, out):
+        lst = os.path.join(work, os.path.basename(out) + ".txt")
+        with open(lst, "w", encoding="utf-8") as f:
+            for p in files:
+                f.write(f"file '{os.path.abspath(p)}'\n")
+        run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", lst,
+             "-ar", "44100", "-ac", "2", out])
+        return out
+
+    return concat(vocs, os.path.join(work, "vocals_all.wav")), \
+        concat(muss, os.path.join(work, "music_all.wav"))
 
 
 def run_job(job: dict, log=print):
@@ -61,7 +125,7 @@ def run_job(job: dict, log=print):
     total_dur = sf.info(in44).frames / 44100
 
     log("[cover] 2/5 вырезаю музыку (demucs, чтобы RVC ее не захватил)...")
-    voc44, mus44 = separate(in44, work)
+    voc44, mus44 = separate(in44, work, log=log)
 
     log("[cover] 3/5 анализ голоса + параметры...")
     v16, _ = librosa.load(voc44, sr=16000, mono=True)
@@ -79,7 +143,8 @@ def run_job(job: dict, log=print):
     pack = rvc.load(vinfo["pth"], vinfo.get("index"))
     out, sr = rvc.convert(pack, v16.astype("float32"), transpose=transpose,
                           index_rate=params["index_rate"],
-                          rms_mix_rate=params["rms_mix_rate"], protect=params["protect"])
+                          rms_mix_rate=params["rms_mix_rate"], protect=params["protect"],
+                          ref_level=v16.astype("float32"))
     conv_wav = os.path.join(work, "conv.wav")
     sf.write(conv_wav, out, sr)
 
