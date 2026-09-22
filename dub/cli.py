@@ -49,26 +49,36 @@ def transcribe(wav: str, src: str):
     return out
 
 
-def translate_batch(texts, src: str, dst: str):
+def translate_batch(texts, src: str, dst: str, tries: int = 8):
     from google import genai
     from google.genai import types
     import config
+    import time
     client = genai.Client(api_key=config.GOOGLE_API_KEY)
     numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
     prompt = (
         f"Translate from {src} to {dst}. Keep each line short, similar length to source, "
         f"no explanations. Return ONLY the numbered lines in the same format 'N. text'.\n{numbered}"
     )
-    resp = client.models.generate_content(
-        model=config.GEMMA_MODEL,
-        config=types.GenerateContentConfig(
-            temperature=0.3,
-            max_output_tokens=2000,
-            thinking_config=types.ThinkingConfig(thinking_level="MINIMAL"),
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-        ),
-        contents=prompt,
-    )
+    last = None
+    for attempt in range(1, tries + 1):
+        try:
+            resp = client.models.generate_content(
+                model=config.GEMMA_MODEL,
+                config=types.GenerateContentConfig(
+                    temperature=0.3,
+                    max_output_tokens=2000,
+                    thinking_config=types.ThinkingConfig(thinking_level="MINIMAL"),
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                ),
+                contents=prompt,
+            )
+            break
+        except Exception as e:  # 503/500 при перегрузе - ждем и долбим дальше
+            last = e
+            time.sleep(min(3 * attempt, 20))
+    else:
+        raise last
     lines = (resp.text or "").strip().split("\n")
     out = []
     for i in range(len(texts)):
