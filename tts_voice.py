@@ -3,6 +3,12 @@ import os
 os.environ.setdefault("TORCHDYNAMO_VERBOSE", "0")
 os.environ.setdefault("TORCH_LOGS", "-all")
 os.environ.setdefault("TORCHDYNAMO_REPRO_LEVEL", "0")
+# Постоянный кэш компиляции: без него каждый рестарт компилирует заново (~1 мин).
+# Вне OneDrive чтобы гигабайты кэша не синкались в облако.
+os.environ.setdefault(
+    "TORCHINDUCTOR_CACHE_DIR",
+    os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "Shyni", "inductor"),
+)
 import warnings
 warnings.filterwarnings("ignore")
 import logging

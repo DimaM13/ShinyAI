@@ -157,10 +157,10 @@ async def main():
         log(f"я @{BOT_USERNAME} id={BOT_ID}, owner={config.OWNER_ID}")
     except Exception as e:
         log(f"get_me fail: {e}")
-    log("warmup TTS (клон, 1-2 мин, тихо)...")
+    log("warmup TTS (клон, тихо)...")
     try:
         t0 = time.time()
-        await asyncio.to_thread(tts_voice.speak_to_ogg, "Привет! Я Shyni, прогрев!", tempfile.mktemp(suffix=".ogg"))
+        await asyncio.to_thread(tts_voice.speak_to_ogg, "Привет!", tempfile.mktemp(suffix=".ogg"))
         log(f"warmup ок за {time.time()-t0:.0f}с")
     except Exception as e:
         log(f"warmup fail: {e}")
